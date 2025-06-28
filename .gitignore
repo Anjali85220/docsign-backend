@@ -1,3 +1,6 @@
 node_modules/
 uploads/
 .env
+# Ignore everything in uploads except PDFs
+uploads/*
+!uploads/**/*.pdf
