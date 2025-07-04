@@ -5,46 +5,22 @@ const path = require("path");
 const fs = require("fs");
 require("dotenv").config();
 
-// Create necessary upload folders
+// Initialize Express app
+const app = express();
+
+// ✅ Ensure uploads folders exist
 const uploadsDir = path.join(__dirname, "uploads");
 const pdfDir = path.join(uploadsDir, "pdf");
 const signedDir = path.join(uploadsDir, "signed");
 
 if (!fs.existsSync(pdfDir)) {
   fs.mkdirSync(pdfDir, { recursive: true });
-  console.log("Created folder: uploads/pdf");
+  console.log("📁 Created uploads/pdf");
 }
 if (!fs.existsSync(signedDir)) {
   fs.mkdirSync(signedDir, { recursive: true });
-  console.log("Created folder: uploads/signed");
+  console.log("📁 Created uploads/signed");
 }
-
-// Import routes (with fallback safety)
-let docRoutes, authRoutes, signatureRoutes, protectedRoutes;
-
-try {
-  docRoutes = require("./routes/docRoutes");
-} catch (e) {
-  console.error("❌ Failed to load docRoutes:", e.message);
-}
-try {
-  authRoutes = require("./routes/authRoutes");
-} catch (e) {
-  console.error("❌ Failed to load authRoutes:", e.message);
-}
-try {
-  signatureRoutes = require("./routes/signatureRoutes");
-} catch (e) {
-  console.error("❌ Failed to load signatureRoutes:", e.message);
-}
-try {
-  protectedRoutes = require("./routes/protectedRoutes");
-} catch (e) {
-  console.warn("⚠️ Skipping optional protectedRoutes:", e.message);
-}
-
-// Initialize Express app
-const app = express();
 
 // Middleware
 app.use(cors({
@@ -54,25 +30,40 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Static file serving
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-app.use('/pdf', express.static(path.join(__dirname, 'uploads/pdf')));
-app.use('/signed', express.static(path.join(__dirname, 'uploads/signed')));
+// Serve static files
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+app.use("/pdf", express.static(path.join(__dirname, "uploads/pdf")));
+app.use("/signed", express.static(path.join(__dirname, "uploads/signed")));
 
-// API Routes
-if (authRoutes) app.use("/api/auth", authRoutes);
-if (protectedRoutes) app.use("/api", protectedRoutes);
-if (docRoutes) app.use("/api/docs", docRoutes);
-if (signatureRoutes) app.use("/api/signatures", signatureRoutes);
+// ✅ Import routes safely
+let docRoutes = null;
+let authRoutes = null;
+let signatureRoutes = null;
+let protectedRoutes = null;
+
+try {
+  docRoutes = require("./routes/docRoutes");
+  authRoutes = require("./routes/authRoutes");
+  signatureRoutes = require("./routes/signatureRoutes");
+  protectedRoutes = require("./routes/protectedRoutes");
+} catch (err) {
+  console.error("❌ Error loading routes:", err.message);
+}
+
+// ✅ Use routes only if they're valid functions
+if (authRoutes && typeof authRoutes === "function") app.use("/api/auth", authRoutes);
+if (protectedRoutes && typeof protectedRoutes === "function") app.use("/api", protectedRoutes);
+if (docRoutes && typeof docRoutes === "function") app.use("/api/docs", docRoutes);
+if (signatureRoutes && typeof signatureRoutes === "function") app.use("/api/signatures", signatureRoutes);
 
 // Health check
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "OK", timestamp: new Date() });
 });
 
-// Error middleware
+// Error handling middleware
 app.use((err, req, res, next) => {
-  console.error("Server Error:", err.stack);
+  console.error("❌ Server error:", err.stack);
   res.status(500).json({ error: "Internal Server Error" });
 });
 
@@ -102,6 +93,6 @@ startServer();
 // Graceful shutdown
 process.on("SIGINT", async () => {
   await mongoose.connection.close();
-  console.log("MongoDB connection closed");
+  console.log("🔌 MongoDB connection closed");
   process.exit(0);
 });
