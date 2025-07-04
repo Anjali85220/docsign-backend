@@ -16,10 +16,11 @@ const getImageFormat = (dataUrl) => {
   return "png";
 };
 
-// Helper: Generate signed PDF with embedded signature(s)
+// Helper: Generate signed PDF
 const generateSignedPdf = async (filePath, signatures) => {
   try {
-    const pdfBytes = fs.readFileSync(filePath);
+    const absolutePath = path.join(__dirname, "../uploads", filePath);
+    const pdfBytes = fs.readFileSync(absolutePath);
     const pdfDoc = await PDFDocument.load(pdfBytes);
     pdfDoc.registerFontkit(fontkit);
     const helveticaFont = await pdfDoc.embedFont("Helvetica");
@@ -36,7 +37,7 @@ const generateSignedPdf = async (filePath, signatures) => {
           const imageBytes = Buffer.from(base64Data, "base64");
           let image = null;
 
-          if (signature.signatureType === "image" || signature.signatureType === "draw") {
+          if (["image", "draw"].includes(signature.signatureType)) {
             const format = getImageFormat(signature.signature);
             image = format === "jpeg"
               ? await pdfDoc.embedJpg(imageBytes)
@@ -86,9 +87,10 @@ const generateSignedPdf = async (filePath, signatures) => {
 // 📤 Upload PDF
 router.post("/upload", authMiddleware, upload.single("pdf"), async (req, res) => {
   try {
+    const filePath = `pdf/${req.file.filename}`;
     const doc = new Document({
       originalName: req.file.originalname,
-      filePath: req.file.path,
+      filePath,
       uploadedBy: req.user.id,
       status: "pending",
     });
@@ -100,7 +102,7 @@ router.post("/upload", authMiddleware, upload.single("pdf"), async (req, res) =>
   }
 });
 
-// ✅ Complete (Sign) the document
+// ✅ Sign Document
 router.put("/:id/complete", authMiddleware, async (req, res) => {
   try {
     const { signatures, pdfWidth, pdfHeight } = req.body;
@@ -117,30 +119,22 @@ router.put("/:id/complete", authMiddleware, async (req, res) => {
 
     const signedBytes = await generateSignedPdf(doc.filePath, signaturesWithSize);
 
-    const signedDir = path.join(__dirname, "../uploads/signed");
-    if (!fs.existsSync(signedDir)) fs.mkdirSync(signedDir, { recursive: true });
-
     const signedFileName = `signed_${Date.now()}_${path.basename(doc.filePath)}`;
-    const signedPathRelative = path.join("uploads", "signed", signedFileName);
-    const signedPath = path.join(__dirname, "../", signedPathRelative);
-    fs.writeFileSync(signedPath, signedBytes);
+    const signedFilePath = `signed/${signedFileName}`;
+    const signedFullPath = path.join(__dirname, "../uploads", signedFilePath);
+    fs.writeFileSync(signedFullPath, signedBytes);
 
-    const updatedDoc = await Document.findByIdAndUpdate(
-      req.params.id,
-      {
-        signatures: signaturesWithSize,
-        signedFilePath: signedPathRelative,
-        status: "completed",
-        signed: true,
-        updatedAt: Date.now(),
-      },
-      { new: true }
-    );
+    doc.signatures = signaturesWithSize;
+    doc.signedFilePath = signedFilePath;
+    doc.status = "completed";
+    doc.signed = true;
+    doc.updatedAt = Date.now();
+    await doc.save();
 
     res.json({
       message: "Document signed successfully",
-      doc: updatedDoc,
-      signedFilePath: signedPathRelative,
+      doc,
+      signedFilePath,
     });
   } catch (err) {
     console.error("Sign PDF Error:", err.message);
@@ -148,7 +142,7 @@ router.put("/:id/complete", authMiddleware, async (req, res) => {
   }
 });
 
-// 📥 Get All Documents for Logged-in User
+// 📥 Get All Documents
 router.get("/", authMiddleware, async (req, res) => {
   try {
     const docs = await Document.find({ uploadedBy: req.user.id }).sort({ createdAt: -1 });
@@ -182,7 +176,7 @@ router.delete("/:id", authMiddleware, async (req, res) => {
 
     [doc.filePath, doc.signedFilePath].forEach((file) => {
       if (file) {
-        const fullPath = path.join(__dirname, "../", file);
+        const fullPath = path.join(__dirname, "../uploads", file);
         if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
       }
     });
@@ -191,35 +185,6 @@ router.delete("/:id", authMiddleware, async (req, res) => {
     res.json({ message: "Document deleted successfully" });
   } catch (err) {
     res.status(500).json({ message: "Failed to delete document", error: err.message });
-  }
-});
-
-// 📄 Serve signed PDF
-router.get("/file/:filename", authMiddleware, async (req, res) => {
-  try {
-    const filename = req.params.filename;
-    const filePath = path.join(__dirname, "../../uploads/signed", filename);
-
-    if (!fs.existsSync(filePath))
-      return res.status(404).json({ message: "File not found" });
-
-    const doc = await Document.findOne({
-      $or: [
-        { filePath: { $regex: filename } },
-        { signedFilePath: { $regex: filename } },
-      ],
-      uploadedBy: req.user.id,
-    });
-
-    if (!doc)
-      return res.status(403).json({ message: "Unauthorized access" });
-
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
-    fs.createReadStream(filePath).pipe(res);
-  } catch (err) {
-    console.error("Error serving file:", err.message);
-    res.status(500).json({ message: "Error serving file", error: err.message });
   }
 });
 
