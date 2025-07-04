@@ -86,15 +86,20 @@ const generateSignedPdf = async (filePath, signatures) => {
 
 router.post("/upload", authMiddleware, upload.single("pdf"), async (req, res) => {
   try {
+    if (!req.file) {
+      return res.status(400).json({ message: "No PDF file uploaded" });
+    }
+
     const newDoc = new Document({
       originalName: req.file.originalname,
       filePath: `/uploads/pdf/${req.file.filename}`,
-      userId: req.user.id,
+      uploadedBy: req.user.id,  // ✅ FIXED: match schema
     });
+
     await newDoc.save();
     res.status(201).json({ message: "Uploaded successfully", doc: newDoc });
   } catch (err) {
-    console.error("Upload error:", err);
+    console.error("Upload error:", err.message);
     res.status(500).json({ message: "Upload failed", error: err.message });
   }
 });
