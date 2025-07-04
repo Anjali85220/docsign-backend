@@ -38,8 +38,8 @@ app.use(express.urlencoded({ extended: true }));
 
 // Serve static files (PDFs and signed files)
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
-
+app.use('/pdf', express.static(path.join(__dirname, 'uploads/pdf')));
+app.use('/signed', express.static(path.join(__dirname, 'uploads/signed')));
 // API Routes
 app.use("/api/auth", authRoutes);
 app.use("/api", protectedRoutes); // Optional protected routes
