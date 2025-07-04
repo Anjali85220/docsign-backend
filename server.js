@@ -5,7 +5,7 @@ const path = require("path");
 const fs = require("fs");
 require("dotenv").config();
 
-// Create necessary upload folders if they don't exist
+// Create necessary upload folders
 const uploadsDir = path.join(__dirname, "uploads");
 const pdfDir = path.join(uploadsDir, "pdf");
 const signedDir = path.join(uploadsDir, "signed");
@@ -19,11 +19,29 @@ if (!fs.existsSync(signedDir)) {
   console.log("Created folder: uploads/signed");
 }
 
-// Import routes
-const docRoutes = require("./routes/docRoutes");
-const authRoutes = require("./routes/authRoutes");
-const protectedRoutes = require("./routes/protectedRoutes"); // Optional
-const signatureRoutes = require("./routes/signatureRoutes");
+// Import routes (with fallback safety)
+let docRoutes, authRoutes, signatureRoutes, protectedRoutes;
+
+try {
+  docRoutes = require("./routes/docRoutes");
+} catch (e) {
+  console.error("❌ Failed to load docRoutes:", e.message);
+}
+try {
+  authRoutes = require("./routes/authRoutes");
+} catch (e) {
+  console.error("❌ Failed to load authRoutes:", e.message);
+}
+try {
+  signatureRoutes = require("./routes/signatureRoutes");
+} catch (e) {
+  console.error("❌ Failed to load signatureRoutes:", e.message);
+}
+try {
+  protectedRoutes = require("./routes/protectedRoutes");
+} catch (e) {
+  console.warn("⚠️ Skipping optional protectedRoutes:", e.message);
+}
 
 // Initialize Express app
 const app = express();
@@ -36,22 +54,23 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve static files (PDFs and signed files)
+// Static file serving
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/pdf', express.static(path.join(__dirname, 'uploads/pdf')));
 app.use('/signed', express.static(path.join(__dirname, 'uploads/signed')));
-// API Routes
-app.use("/api/auth", authRoutes);
-app.use("/api", protectedRoutes); // Optional protected routes
-app.use("/api/docs", docRoutes);
-app.use("/api/signatures", signatureRoutes);
 
-// Health check endpoint
+// API Routes
+if (authRoutes) app.use("/api/auth", authRoutes);
+if (protectedRoutes) app.use("/api", protectedRoutes);
+if (docRoutes) app.use("/api/docs", docRoutes);
+if (signatureRoutes) app.use("/api/signatures", signatureRoutes);
+
+// Health check
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "OK", timestamp: new Date() });
 });
 
-// Error handling middleware
+// Error middleware
 app.use((err, req, res, next) => {
   console.error("Server Error:", err.stack);
   res.status(500).json({ error: "Internal Server Error" });
