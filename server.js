@@ -2,7 +2,22 @@ const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const path = require("path");
+const fs = require("fs");
 require("dotenv").config();
+
+// Create necessary upload folders if they don't exist
+const uploadsDir = path.join(__dirname, "uploads");
+const pdfDir = path.join(uploadsDir, "pdf");
+const signedDir = path.join(uploadsDir, "signed");
+
+if (!fs.existsSync(pdfDir)) {
+  fs.mkdirSync(pdfDir, { recursive: true });
+  console.log("Created folder: uploads/pdf");
+}
+if (!fs.existsSync(signedDir)) {
+  fs.mkdirSync(signedDir, { recursive: true });
+  console.log("Created folder: uploads/signed");
+}
 
 // Import routes
 const docRoutes = require("./routes/docRoutes");
@@ -21,7 +36,7 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve static files
+// Serve static files (PDFs and signed files)
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // API Routes
@@ -37,7 +52,7 @@ app.get("/health", (req, res) => {
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error("Server Error:", err.stack);
   res.status(500).json({ error: "Internal Server Error" });
 });
 
@@ -45,9 +60,9 @@ app.use((err, req, res, next) => {
 const connectDB = async () => {
   try {
     await mongoose.connect(process.env.MONGO_URI);
-    console.log("MongoDB connected successfully");
+    console.log("✅ MongoDB connected successfully");
   } catch (error) {
-    console.error("MongoDB connection error:", error);
+    console.error("❌ MongoDB connection error:", error);
     process.exit(1);
   }
 };
@@ -57,14 +72,14 @@ const PORT = process.env.PORT || 5000;
 const startServer = async () => {
   await connectDB();
   app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
   });
 };
 
 startServer();
 
-// Handle shutdown gracefully
+// Graceful shutdown
 process.on("SIGINT", async () => {
   await mongoose.connection.close();
   console.log("MongoDB connection closed");
