@@ -72,10 +72,11 @@ router.post("/:id/sign", authMiddleware, async (req, res) => {
     await doc.save();
 
     res.json({ 
-      message: "Signatures saved successfully", 
-      doc,
-      signedPdfUrl: `/api/docs/file/${signedFileName}`
-    });
+  message: "Signatures saved successfully", 
+  doc,
+  signedPdfUrl: `https://docsign-backend.onrender.com/uploads/signed/${signedFileName}` // ✅ Correct public path
+});
+
   } catch (error) {
     console.error("Error saving annotations:", error);
     res.status(500).json({ message: "Internal server error" });
