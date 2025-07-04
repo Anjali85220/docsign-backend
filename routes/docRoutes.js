@@ -7,6 +7,7 @@ const path = require("path");
 const { PDFDocument, rgb } = require('pdf-lib');
 const fontkit = require('@pdf-lib/fontkit');
 
+
 const router = express.Router();
 
 // Helper function to determine image format from data URL
