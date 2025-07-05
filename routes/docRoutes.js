@@ -37,29 +37,44 @@ const getImageFormat = (dataUrl) => {
 // Helper: Generate signed PDF with proper error handling
 const generateSignedPdf = async (filePath, signatures) => {
   try {
-    const absolutePath = path.join(__dirname, "../uploads", filePath);
+    // Handle both relative and absolute paths
+    const absolutePath = path.isAbsolute(filePath) 
+      ? filePath 
+      : path.join(__dirname, "../uploads", filePath.replace(/^\/+/, ''));
+    
+    console.log("Attempting to read PDF from:", absolutePath);
+    
     if (!fs.existsSync(absolutePath)) {
-      throw new Error("PDF file not found");
+      throw new Error(`PDF file not found at path: ${absolutePath}`);
     }
 
     const pdfBytes = fs.readFileSync(absolutePath);
     const pdfDoc = await PDFDocument.load(pdfBytes);
     pdfDoc.registerFontkit(fontkit);
+    
+    // Use standard font that's always available
     const helveticaFont = await pdfDoc.embedFont("Helvetica");
     const pages = pdfDoc.getPages();
 
+    if (!signatures || signatures.length === 0) {
+      console.log("No signatures to add, returning original PDF");
+      return await pdfDoc.save();
+    }
+
     for (const signature of signatures) {
-      if (signature.page <= 0 || signature.page > pages.length) {
-        throw new Error(`Invalid page number: ${signature.page}`);
-      }
-
-      const page = pages[signature.page - 1];
-      const pdfX = signature.x;
-      const pdfY = signature.y;
-
       try {
+        if (!signature.page || signature.page <= 0 || signature.page > pages.length) {
+          console.warn(`Invalid page number: ${signature.page}, skipping signature`);
+          continue;
+        }
+
+        const page = pages[signature.page - 1];
+        const pdfX = Number(signature.x) || 0;
+        const pdfY = Number(signature.y) || 0;
+
         if (signature.signatureType === "text") {
-          page.drawText(signature.signature, {
+          const text = signature.signature || "[SIGNED]";
+          page.drawText(text, {
             x: pdfX,
             y: pdfY,
             size: 12,
@@ -69,14 +84,29 @@ const generateSignedPdf = async (filePath, signatures) => {
         } else if (["image", "draw"].includes(signature.signatureType)) {
           const base64Data = signature.signature?.split(",")[1];
           if (!base64Data) {
-            throw new Error("Invalid signature data");
+            throw new Error("Invalid signature data - no base64 content");
           }
 
           const imageBytes = Buffer.from(base64Data, "base64");
           const format = getImageFormat(signature.signature);
-          const image = format === "jpeg"
-            ? await pdfDoc.embedJpg(imageBytes)
-            : await pdfDoc.embedPng(imageBytes);
+          
+          let image;
+          try {
+            image = format === "jpeg"
+              ? await pdfDoc.embedJpg(imageBytes)
+              : await pdfDoc.embedPng(imageBytes);
+          } catch (embedError) {
+            console.error("Image embed error:", embedError.message);
+            // Fallback to text
+            page.drawText("[SIGNED]", {
+              x: pdfX,
+              y: pdfY,
+              size: 12,
+              font: helveticaFont,
+              color: rgb(0, 0, 0),
+            });
+            continue;
+          }
 
           const maxWidth = 150;
           const maxHeight = 60;
@@ -91,11 +121,13 @@ const generateSignedPdf = async (filePath, signatures) => {
             height: scaledHeight,
           });
         }
-      } catch (error) {
-        console.error("Signature render error:", error.message);
+      } catch (signatureError) {
+        console.error("Signature render error:", signatureError.message);
+        // Fallback: add simple text signature
+        const page = pages[signature.page - 1];
         page.drawText("[SIGNED]", {
-          x: pdfX,
-          y: pdfY,
+          x: Number(signature.x) || 0,
+          y: Number(signature.y) || 0,
           size: 12,
           font: helveticaFont,
           color: rgb(0, 0, 0),
@@ -106,6 +138,7 @@ const generateSignedPdf = async (filePath, signatures) => {
     return await pdfDoc.save();
   } catch (err) {
     console.error("PDF Generation Error:", err.message);
+    console.error("Stack trace:", err.stack);
     throw err;
   }
 };
@@ -123,6 +156,7 @@ const validateDocumentOwner = async (req, res, next) => {
     req.document = doc;
     next();
   } catch (err) {
+    console.error("Document validation error:", err.message);
     next(err);
   }
 };
@@ -156,21 +190,38 @@ router.post("/upload", authMiddleware, upload.single("pdf"), async (req, res, ne
 
 router.put("/:id/complete", authMiddleware, validateDocumentOwner, async (req, res, next) => {
   try {
+    console.log("Complete document request received for ID:", req.params.id);
+    console.log("Request body:", JSON.stringify(req.body, null, 2));
+    
     const { signatures, pdfWidth, pdfHeight } = req.body;
     
+    // Validate signatures
     if (!signatures || !Array.isArray(signatures)) {
+      console.log("Invalid signatures provided:", signatures);
       return res.status(400).json({ 
-        message: "Invalid signatures provided" 
+        message: "Invalid signatures provided - must be an array" 
       });
     }
 
+    // Check if document exists and has valid file path
+    if (!req.document || !req.document.filePath) {
+      console.log("Document or file path missing:", req.document);
+      return res.status(400).json({ 
+        message: "Document file path is missing" 
+      });
+    }
+
+    console.log("Processing document with file path:", req.document.filePath);
+
     const signaturesWithSize = signatures.map((sig) => ({
       ...sig,
-      pageWidth: pdfWidth,
-      pageHeight: pdfHeight,
+      pageWidth: pdfWidth || 800,
+      pageHeight: pdfHeight || 600,
     }));
 
+    console.log("Generating signed PDF...");
     const signedBytes = await generateSignedPdf(req.document.filePath, signaturesWithSize);
+    
     const signedFileName = `signed_${Date.now()}_${path.basename(req.document.filePath)}`;
     const signedFilePath = `signed/${signedFileName}`;
     const signedFullPath = path.join(__dirname, "../uploads", signedFilePath);
@@ -178,11 +229,14 @@ router.put("/:id/complete", authMiddleware, validateDocumentOwner, async (req, r
     // Create signed directory if it doesn't exist
     const signedDir = path.join(__dirname, "../uploads/signed");
     if (!fs.existsSync(signedDir)) {
+      console.log("Creating signed directory:", signedDir);
       fs.mkdirSync(signedDir, { recursive: true });
     }
 
+    console.log("Writing signed PDF to:", signedFullPath);
     fs.writeFileSync(signedFullPath, signedBytes);
 
+    // Update document in database
     req.document.signatures = signaturesWithSize;
     req.document.signedFilePath = signedFilePath;
     req.document.status = "completed";
@@ -191,6 +245,7 @@ router.put("/:id/complete", authMiddleware, validateDocumentOwner, async (req, r
 
     await req.document.save();
 
+    console.log("Document completed successfully");
     res.json({
       message: "Document signed successfully",
       doc: req.document,
@@ -198,6 +253,8 @@ router.put("/:id/complete", authMiddleware, validateDocumentOwner, async (req, r
       size: signedBytes.length
     });
   } catch (err) {
+    console.error("Complete document error:", err.message);
+    console.error("Stack trace:", err.stack);
     next(err);
   }
 });
@@ -208,6 +265,7 @@ router.get("/", authMiddleware, async (req, res) => {
     const docs = await Document.find({ uploadedBy: req.user.id }).sort({ createdAt: -1 });
     res.json({ docs });
   } catch (err) {
+    console.error("Get documents error:", err.message);
     res.status(500).json({ message: "Error fetching documents", error: err.message });
   }
 });
@@ -222,6 +280,7 @@ router.get("/:id", authMiddleware, async (req, res) => {
 
     res.json({ doc });
   } catch (err) {
+    console.error("Get document error:", err.message);
     res.status(500).json({ message: "Error fetching document", error: err.message });
   }
 });
@@ -236,16 +295,44 @@ router.delete("/:id", authMiddleware, async (req, res) => {
 
     [doc.filePath, doc.signedFilePath].forEach((file) => {
       if (file) {
-        const fullPath = path.join(__dirname, "../uploads", file);
-        if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+        const fullPath = path.join(__dirname, "../uploads", file.replace(/^\/+/, ''));
+        if (fs.existsSync(fullPath)) {
+          fs.unlinkSync(fullPath);
+          console.log("Deleted file:", fullPath);
+        }
       }
     });
 
     await doc.deleteOne();
     res.json({ message: "Document deleted successfully" });
   } catch (err) {
+    console.error("Delete document error:", err.message);
     res.status(500).json({ message: "Failed to delete document", error: err.message });
   }
+});
+
+// Global error handler for this router
+router.use((err, req, res, next) => {
+  console.error("DocRoutes Error:", err.message);
+  console.error("Stack trace:", err.stack);
+  
+  if (err.name === 'ValidationError') {
+    return res.status(400).json({ 
+      error: 'Validation Error', 
+      details: err.message 
+    });
+  }
+  
+  if (err.name === 'CastError') {
+    return res.status(400).json({ 
+      error: 'Invalid ID format' 
+    });
+  }
+  
+  res.status(500).json({ 
+    error: 'Internal Server Error',
+    message: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong'
+  });
 });
 
 module.exports = router;
